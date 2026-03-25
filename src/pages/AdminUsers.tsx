@@ -138,7 +138,7 @@ export default function AdminUsers() {
 
   return (
     <div className="min-h-[100dvh] bg-vox-page">
-      <div className="max-w-6xl mx-auto px-4 py-6">
+      <div className="max-w-full mx-auto px-4 py-6">
         <PageHeader
           title="Gestione Utenti"
           subtitle="Amministra utenti, piani e incassi"
@@ -193,8 +193,8 @@ export default function AdminUsers() {
 
         <Card>
           <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table>
+            <div className="overflow-x-auto w-full">
+              <Table className="min-w-max">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Nome</TableHead>
