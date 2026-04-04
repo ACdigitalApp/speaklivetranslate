@@ -1,414 +1,515 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
-import { Plus, RefreshCw, Pencil, Key, Trash2, Search, DollarSign, TrendingUp, Users as UsersIcon, CreditCard, Globe, Smartphone } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { useState, useCallback, useEffect } from 'react';
+import { motion } from 'framer-motion';
+import {
+  Users, Shield, ShieldCheck, Phone, Save, Loader2, RefreshCw,
+  Search, Trash2, TrendingUp, UserPlus, Crown, Ban, CheckCircle2,
+  Calendar, Euro, AlertTriangle, UserCheck, Globe, Smartphone, CreditCard,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog';
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
-import { PageHeader } from '@/components/layout/PageHeader';
-import { RoleBadge } from '@/components/auth/RoleBadge';
-import { PlanBadge, StatusBadge } from '@/components/subscription/PlanBadge';
+import { Label } from '@/components/ui/label';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from '@/components/ui/dialog';
+import {
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+} from '@/components/ui/table';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { useAuthStore, getMockUsers } from '@/store/useAuthStore';
-import { getProviderLabel } from '@/config/subscriptions';
 import { useToast } from '@/hooks/use-toast';
-import type { AppUser, UserRole } from '@/types/auth';
+import { format } from 'date-fns';
+import { it } from 'date-fns/locale';
+import type { AppUser, UserRole, PlanType, SubscriptionStatus } from '@/types/auth';
 import type { BillingProvider } from '@/types/billing';
 
-const PROVIDER_COLORS: Record<BillingProvider, string> = {
-  mock: 'bg-muted text-muted-foreground',
-  stripe: 'bg-primary/10 text-primary',
-  apple: 'bg-muted text-foreground',
-  googleplay: 'bg-muted text-foreground',
+// ── Cross-app revenue ─────────────────────────────────────────────────────────
+
+const CROSS_APP_APIS: Record<string, { label: string; url: string }> = {
+  gestionepassword: { label: 'Gestione Password', url: 'https://bilingual-pwd-mgr.emergent.host/admin/revenue' },
+  gestionescadenze: { label: 'Gestione Scadenze', url: 'https://gestione-scadenze-app.vercel.app/api/admin/revenue' },
+  speakeasy: { label: 'SpeakEasy', url: '' }, // computed locally
+  librifree: { label: 'Librifree', url: 'https://librifree-backend.up.railway.app/api/admin/revenue' },
 };
 
-function ProviderBadge({ provider }: { provider: BillingProvider }) {
+interface CrossAppData { amount: number; users: number; loading: boolean; }
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+const PLAN_LABELS: Record<PlanType, string> = {
+  free: 'Free', trial: 'Trial',
+  premium_monthly: 'Premium M', premium_yearly: 'Premium Y',
+};
+
+const STATUS_LABELS: Record<string, string> = {
+  active: 'Attivo', in_trial: 'Trial', expired: 'Scaduto',
+  cancelled: 'Cancellato', blocked: 'Bloccato',
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  active: 'bg-green-50 text-green-700 border-green-200',
+  in_trial: 'bg-blue-50 text-blue-700 border-blue-200',
+  expired: 'bg-orange-50 text-orange-700 border-orange-200',
+  cancelled: 'bg-gray-100 text-gray-600 border-gray-200',
+  blocked: 'bg-red-50 text-red-700 border-red-200',
+};
+
+function getRoleBadge(role: UserRole) {
+  if (role === 'admin') return <Badge className="bg-green-500 text-white text-xs gap-1"><Shield className="w-3 h-3" />Admin</Badge>;
+  if (role === 'user_pro') return <Badge className="bg-yellow-400 text-yellow-900 text-xs gap-1 font-semibold"><Crown className="w-3 h-3" />User Pro</Badge>;
+  return <Badge variant="secondary" className="text-xs">User</Badge>;
+}
+
+function getPlanBadge(plan: PlanType) {
+  if (plan === 'premium_monthly' || plan === 'premium_yearly') {
+    return <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-300 text-xs gap-1"><Crown className="w-3 h-3" />{PLAN_LABELS[plan]}</Badge>;
+  }
+  if (plan === 'trial') return <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200 text-xs">Trial</Badge>;
+  return <Badge variant="outline" className="text-xs text-muted-foreground">Free</Badge>;
+}
+
+function getStatusBadge(status: string) {
+  const label = STATUS_LABELS[status] || status;
+  const color = STATUS_COLORS[status] || STATUS_COLORS.active;
+  return <Badge variant="outline" className={`text-xs font-medium ${color}`}>{label}</Badge>;
+}
+
+function getProviderBadge(provider?: BillingProvider) {
+  if (!provider || provider === 'mock') return <span className="text-muted-foreground text-xs">—</span>;
+  if (provider === 'stripe') return <Badge variant="outline" className="text-xs gap-1"><Globe className="w-3 h-3" />Stripe</Badge>;
+  if (provider === 'apple') return <Badge variant="outline" className="text-xs gap-1"><Smartphone className="w-3 h-3" />App Store</Badge>;
+  if (provider === 'googleplay') return <Badge variant="outline" className="text-xs gap-1"><Smartphone className="w-3 h-3" />Google Play</Badge>;
+  return <Badge variant="outline" className="text-xs">{provider}</Badge>;
+}
+
+function formatDate(d: string | null | undefined) {
+  if (!d) return '—';
+  try { return format(new Date(d), 'dd/MM/yy HH:mm', { locale: it }); } catch { return d.split('T')[0]; }
+}
+
+function StatCard({ icon: Icon, label, value, color = 'text-primary' }: {
+  icon: React.ElementType; label: string; value: string | number; color?: string;
+}) {
   return (
-    <Badge variant="outline" className={`text-xs ${PROVIDER_COLORS[provider]}`}>
-      {provider === 'stripe' && <Globe size={10} className="mr-1" />}
-      {(provider === 'apple' || provider === 'googleplay') && <Smartphone size={10} className="mr-1" />}
-      {getProviderLabel(provider)}
-    </Badge>
+    <Card className="border border-border/60">
+      <CardContent className="pt-4 pb-4">
+        <div className="flex flex-col items-center gap-1 text-center">
+          <div className={`p-2 rounded-lg bg-primary/5 ${color}`}><Icon className="w-5 h-5" /></div>
+          <p className="text-xl font-bold">{value}</p>
+          <p className="text-xs text-muted-foreground">{label}</p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
+// ── Edit form type ────────────────────────────────────────────────────────────
+
+interface EditForm {
+  name: string;
+  whatsapp: string;
+  notifications: boolean;
+  role: UserRole;
+  plan: PlanType;
+  subscriptionStatus: string;
+  subscriptionEnd: string;
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
 export default function AdminUsers() {
-  const currentUser = useAuthStore(s => s.currentUser);
   const { toast } = useToast();
+  const currentUser = useAuthStore(s => s.currentUser);
+
   const [users, setUsers] = useState<AppUser[]>(getMockUsers());
-  const [refreshing, setRefreshing] = useState(false);
-  const [userFormOpen, setUserFormOpen] = useState(false);
-  const [pwFormOpen, setPwFormOpen] = useState(false);
-  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
-  const [paymentDetailOpen, setPaymentDetailOpen] = useState(false);
-  const [pwFields, setPwFields] = useState({ next: '', confirm: '' });
-  const [pwError, setPwError] = useState('');
-  const [selectedUser, setSelectedUser] = useState<AppUser | null>(null);
-  const [isNew, setIsNew] = useState(false);
-  const [form, setForm] = useState({ name: '', email: '', role: 'user' as UserRole, whatsapp: '' });
-  const [searchQuery, setSearchQuery] = useState('');
-  const [filterPlan, setFilterPlan] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState<string | null>(null);
+  const [blocking, setBlocking] = useState<string | null>(null);
+  const [editingUser, setEditingUser] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<EditForm>({
+    name: '', whatsapp: '', notifications: false,
+    role: 'user', plan: 'free', subscriptionStatus: 'active', subscriptionEnd: '',
+  });
+  const [search, setSearch] = useState('');
+  const [filterPlan, setFilterPlan] = useState('all');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [showNewUser, setShowNewUser] = useState(false);
+  const [newUserForm, setNewUserForm] = useState({ name: '', email: '', role: 'user' as UserRole, plan: 'free' as PlanType });
+  const [crossApp, setCrossApp] = useState<Record<string, CrossAppData>>({
+    gestionepassword: { amount: 0, users: 0, loading: true },
+    gestionescadenze: { amount: 0, users: 0, loading: true },
+    speakeasy: { amount: 0, users: 0, loading: false },
+    librifree: { amount: 0, users: 0, loading: true },
+  });
 
-  const handleRefresh = useCallback(() => {
-    setRefreshing(true);
-    setTimeout(() => {
-      setUsers(getMockUsers());
-      setRefreshing(false);
-      toast({ title: '✅ Lista aggiornata', description: `${getMockUsers().length} utenti caricati` });
-    }, 600);
-  }, [toast]);
+  // ── Cross-app revenue ───────────────────────────────────────────────────────
 
-  const revenue = useMemo(() => {
-    const now = new Date();
-    const thirtyDaysAgo = new Date(now.getTime() - 30 * 86400000);
-    let totalRevenue = 0, totalBalance = 0, payingUsers = 0, revenueLast30 = 0, trials = 0, expired = 0;
-    users.forEach(u => {
-      totalRevenue += u.totalPaid;
-      totalBalance += u.balance;
-      if (u.totalPaid > 0) payingUsers++;
-      if (u.subscriptionStatus === 'in_trial') trials++;
-      if (u.subscriptionStatus === 'expired') expired++;
-      u.transactions.forEach(t => {
-        if (t.status === 'completed' && new Date(t.date) >= thirtyDaysAgo) revenueLast30 += t.amount;
-      });
-    });
-    return { totalRevenue, totalBalance, payingUsers, revenueLast30, trials, expired };
+  const fetchCrossAppRevenue = useCallback(async () => {
+    // Compute SpeakEasy locally from users
+    const localRevenue = users.reduce((s, u) => s + u.totalPaid, 0);
+    const localPaying = users.filter(u => u.totalPaid > 0).length;
+    setCrossApp(prev => ({ ...prev, speakeasy: { amount: localRevenue, users: localPaying, loading: false } }));
+
+    for (const [key, cfg] of Object.entries(CROSS_APP_APIS)) {
+      if (!cfg.url) continue;
+      try {
+        const res = await fetch(cfg.url, { signal: AbortSignal.timeout(5000) });
+        if (res.ok) {
+          const d = await res.json();
+          setCrossApp(prev => ({ ...prev, [key]: { amount: d.total_revenue ?? 0, users: d.paying_users ?? 0, loading: false } }));
+        } else {
+          setCrossApp(prev => ({ ...prev, [key]: { amount: 0, users: 0, loading: false } }));
+        }
+      } catch {
+        setCrossApp(prev => ({ ...prev, [key]: { amount: 0, users: 0, loading: false } }));
+      }
+    }
   }, [users]);
 
-  const filteredUsers = useMemo(() => {
-    return users.filter(u => {
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase();
-        if (!u.name.toLowerCase().includes(q) && !u.email.toLowerCase().includes(q)) return false;
-      }
-      if (filterPlan !== 'all' && u.plan !== filterPlan) return false;
-      if (filterStatus !== 'all' && u.subscriptionStatus !== filterStatus) return false;
-      return true;
+  useEffect(() => { fetchCrossAppRevenue(); }, [fetchCrossAppRevenue]);
+
+  // ── Refresh ─────────────────────────────────────────────────────────────────
+
+  const refresh = () => {
+    setLoading(true);
+    setTimeout(() => { setUsers(getMockUsers()); setLoading(false); }, 600);
+  };
+
+  // ── Stats ───────────────────────────────────────────────────────────────────
+
+  const stats = {
+    incassoTotale: users.reduce((s, u) => s + u.totalPaid, 0),
+    saldoTotale: users.reduce((s, u) => s + u.balance, 0),
+    utentiPaganti: users.filter(u => u.totalPaid > 0).length,
+    ultimi30gg: (() => {
+      const ago30 = new Date(Date.now() - 30 * 86400000);
+      return users.reduce((s, u) => s + u.transactions.filter(t => t.status === 'completed' && new Date(t.date) >= ago30).reduce((a, t) => a + t.amount, 0), 0);
+    })(),
+    trialAttive: users.filter(u => u.subscriptionStatus === 'in_trial').length,
+    scaduti: users.filter(u => u.subscriptionStatus === 'expired').length,
+  };
+
+  // ── Filters ─────────────────────────────────────────────────────────────────
+
+  const filtered = users.filter(u => {
+    const q = search.toLowerCase();
+    const matchSearch = u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+    const matchPlan = filterPlan === 'all' || u.plan === filterPlan;
+    const matchStatus = filterStatus === 'all' || u.subscriptionStatus === filterStatus;
+    return matchSearch && matchPlan && matchStatus;
+  });
+
+  // ── Edit ────────────────────────────────────────────────────────────────────
+
+  const startEditing = (u: AppUser) => {
+    setEditingUser(u.id);
+    setEditForm({
+      name: u.name, whatsapp: u.whatsapp || '',
+      notifications: u.notifications, role: u.role,
+      plan: u.plan, subscriptionStatus: u.subscriptionStatus,
+      subscriptionEnd: u.subscriptionEnd ? u.subscriptionEnd.split('T')[0] : '',
     });
-  }, [users, searchQuery, filterPlan, filterStatus]);
-
-  const openNew = () => {
-    setIsNew(true);
-    setForm({ name: '', email: '', role: 'user', whatsapp: '' });
-    setUserFormOpen(true);
   };
 
-  const openEdit = (u: AppUser) => {
-    setIsNew(false);
-    setSelectedUser(u);
-    setForm({ name: u.name, email: u.email, role: u.role, whatsapp: u.whatsapp || '' });
-    setUserFormOpen(true);
+  const saveUser = (userId: string) => {
+    setSaving(userId);
+    setTimeout(() => {
+      setUsers(prev => prev.map(u => u.id === userId ? {
+        ...u,
+        name: editForm.name,
+        whatsapp: editForm.whatsapp,
+        notifications: editForm.notifications,
+        role: editForm.role,
+        plan: editForm.plan,
+        subscriptionStatus: editForm.subscriptionStatus as SubscriptionStatus,
+        subscriptionEnd: editForm.subscriptionEnd || undefined,
+      } : u));
+      toast({ title: 'Utente aggiornato con successo' });
+      setEditingUser(null);
+      setSaving(null);
+    }, 500);
   };
 
-  const handleSave = () => {
-    if (!form.name || !form.email) return;
-    if (isNew) {
-      const newUser: AppUser = {
-        id: Date.now().toString(),
-        name: form.name,
-        email: form.email,
-        role: form.role,
-        whatsapp: form.whatsapp || undefined,
-        notifications: true,
-        registeredAt: new Date().toISOString(),
-        lastAccess: new Date().toISOString(),
-        plan: 'free',
-        subscriptionStatus: 'expired',
-        totalPaid: 0,
-        balance: 0,
-        transactions: [],
-        billingProvider: 'mock',
-      };
-      setUsers(prev => [...prev, newUser]);
-    } else if (selectedUser) {
-      setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, name: form.name, email: form.email, role: form.role, whatsapp: form.whatsapp || undefined } : u));
-    }
-    setUserFormOpen(false);
+  const toggleBlock = (u: AppUser) => {
+    setBlocking(u.id);
+    const newStatus = u.subscriptionStatus === 'blocked' ? 'active' : 'blocked';
+    setTimeout(() => {
+      setUsers(prev => prev.map(x => x.id === u.id ? { ...x, subscriptionStatus: newStatus as SubscriptionStatus } : x));
+      toast({ title: newStatus === 'blocked' ? 'Utente bloccato' : 'Utente sbloccato' });
+      setBlocking(null);
+    }, 300);
   };
 
-  const handleDelete = () => {
-    if (selectedUser) setUsers(prev => prev.filter(u => u.id !== selectedUser.id));
-    setDeleteConfirmOpen(false);
-    setSelectedUser(null);
+  const deleteUser = (userId: string) => {
+    setUsers(prev => prev.filter(u => u.id !== userId));
+    toast({ title: 'Utente eliminato' });
   };
 
-  const toggleNotifications = (userId: string) => {
-    setUsers(prev => prev.map(u => u.id === userId ? { ...u, notifications: !u.notifications } : u));
+  const createUser = () => {
+    if (!newUserForm.email) { toast({ title: 'Email obbligatoria', variant: 'destructive' }); return; }
+    const newUser: AppUser = {
+      id: Date.now().toString(),
+      name: newUserForm.name || newUserForm.email,
+      email: newUserForm.email,
+      role: newUserForm.role,
+      notifications: false,
+      registeredAt: new Date().toISOString(),
+      lastAccess: new Date().toISOString(),
+      plan: newUserForm.plan,
+      subscriptionStatus: 'active',
+      totalPaid: 0, balance: 0, transactions: [],
+    };
+    setUsers(prev => [newUser, ...prev]);
+    toast({ title: 'Utente creato con successo' });
+    setShowNewUser(false);
+    setNewUserForm({ name: '', email: '', role: 'user', plan: 'free' });
   };
 
-  const fmtDate = (d?: string) => {
-    if (!d) return '—';
-    try { return new Date(d).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' }); } catch { return d; }
-  };
+  if (loading) return <div className="flex items-center justify-center min-h-[50vh]"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;
 
   return (
-    <div className="min-h-[100dvh] bg-vox-page">
-      <div className="max-w-full mx-auto px-4 py-6">
-        <PageHeader
-          title="Gestione Utenti"
-          subtitle="Amministra utenti, piani e incassi"
-          backTo="/admin"
-          actions={
-            <>
-              <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}><RefreshCw size={14} className={`mr-1 ${refreshing ? 'animate-spin' : ''}`} /> {refreshing ? 'Aggiornando...' : 'Aggiorna'}</Button>
-              <Button size="sm" onClick={openNew}><Plus size={14} className="mr-1" /> Nuovo Utente</Button>
-            </>
-          }
-        />
+    <div className="p-4 md:p-6 max-w-full mx-auto space-y-5">
 
-        {/* Revenue summary cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
-          <SummaryCard label="Incasso Totale" value={`€${revenue.totalRevenue.toFixed(2)}`} icon={<TrendingUp size={16} className="text-primary" />} highlight />
-          <SummaryCard label="Saldo Totale" value={`€${revenue.totalBalance.toFixed(2)}`} icon={<DollarSign size={16} className="text-primary" />} highlight />
-          <SummaryCard label="Utenti Paganti" value={revenue.payingUsers.toString()} icon={<UsersIcon size={16} />} />
-          <SummaryCard label="Ultimi 30gg" value={`€${revenue.revenueLast30.toFixed(2)}`} icon={<CreditCard size={16} />} />
-          <SummaryCard label="Trial Attive" value={revenue.trials.toString()} icon={<UsersIcon size={16} />} />
-          <SummaryCard label="Scaduti" value={revenue.expired.toString()} icon={<UsersIcon size={16} />} />
+      {/* Header */}
+      <div className="flex items-center justify-between gap-4">
+        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-3">
+          <ShieldCheck className="w-7 h-7 text-primary" />
+          <div>
+            <h1 className="text-2xl font-bold text-primary">Gestione Utenti</h1>
+            <p className="text-xs text-muted-foreground">Amministra utenti, piani e incassi</p>
+          </div>
+        </motion.div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={refresh} className="gap-2"><RefreshCw className="w-4 h-4" />Aggiorna</Button>
+          <Button size="sm" onClick={() => setShowNewUser(true)} className="gap-2"><UserPlus className="w-4 h-4" />Nuovo Utente</Button>
         </div>
+      </div>
 
-        {/* Filters */}
-        <div className="flex flex-wrap gap-3 mb-4">
-          <div className="flex-1 min-w-[200px]">
-            <div className="relative">
-              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-              <Input placeholder="Cerca nome o email..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} className="pl-9" />
-            </div>
+      {/* Stats */}
+      <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+        <StatCard icon={Euro} label="Incasso Totale" value={`€${stats.incassoTotale.toFixed(2)}`} color="text-green-600" />
+        <StatCard icon={TrendingUp} label="Saldo Totale" value={`€${stats.saldoTotale.toFixed(2)}`} color="text-blue-600" />
+        <StatCard icon={UserCheck} label="Utenti Paganti" value={stats.utentiPaganti} color="text-yellow-600" />
+        <StatCard icon={Euro} label="Ultimi 30gg" value={`€${stats.ultimi30gg.toFixed(2)}`} color="text-purple-600" />
+        <StatCard icon={Calendar} label="Trial Attive" value={stats.trialAttive} color="text-cyan-600" />
+        <StatCard icon={AlertTriangle} label="Scaduti" value={stats.scaduti} color="text-red-500" />
+      </div>
+
+      {/* Incassi Tutte le App */}
+      <Card>
+        <div className="p-4 border-b flex items-center justify-between">
+          <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+            <TrendingUp className="w-4 h-4" /> Incassi Tutte le App
+          </div>
+          <span className="text-sm font-bold text-primary">
+            Totale Generale: €{Object.values(crossApp).reduce((s, d) => s + (d.loading ? 0 : d.amount), 0).toFixed(2)}
+          </span>
+        </div>
+        <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+          {Object.entries(CROSS_APP_APIS).map(([key, cfg]) => {
+            const d = crossApp[key];
+            return (
+              <div key={key} className="rounded-xl border p-4 flex flex-col gap-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{cfg.label}</p>
+                {d?.loading
+                  ? <div className="flex items-center gap-2 mt-1"><Loader2 className="w-4 h-4 animate-spin opacity-60" /><span className="text-sm opacity-60">Caricamento...</span></div>
+                  : <><p className="text-2xl font-bold text-primary">€{(d?.amount ?? 0).toFixed(2)}</p><p className="text-xs text-muted-foreground">{d?.users ?? 0} utenti paganti</p></>
+                }
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* Filters + Table */}
+      <Card>
+        <div className="p-4 flex flex-wrap items-center gap-3 border-b">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input placeholder="Cerca nome o email..." value={search} onChange={e => setSearch(e.target.value)} className="pl-9 h-8 text-sm" />
           </div>
           <Select value={filterPlan} onValueChange={setFilterPlan}>
-            <SelectTrigger className="w-[150px]"><SelectValue placeholder="Piano" /></SelectTrigger>
+            <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Tutti i piani" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Tutti i piani</SelectItem>
               <SelectItem value="free">Free</SelectItem>
               <SelectItem value="trial">Trial</SelectItem>
-              <SelectItem value="premium_monthly">Monthly</SelectItem>
-              <SelectItem value="premium_yearly">Yearly</SelectItem>
+              <SelectItem value="premium_monthly">Premium M</SelectItem>
+              <SelectItem value="premium_yearly">Premium Y</SelectItem>
             </SelectContent>
           </Select>
           <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-[150px]"><SelectValue placeholder="Stato" /></SelectTrigger>
+            <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Tutti gli stati" /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">Tutti gli stati</SelectItem>
               <SelectItem value="active">Attivo</SelectItem>
-              <SelectItem value="in_trial">In Trial</SelectItem>
+              <SelectItem value="in_trial">Trial</SelectItem>
+              <SelectItem value="cancelled">Cancellato</SelectItem>
+              <SelectItem value="blocked">Bloccato</SelectItem>
               <SelectItem value="expired">Scaduto</SelectItem>
-              <SelectItem value="cancelled">Annullato</SelectItem>
             </SelectContent>
           </Select>
         </div>
 
-        <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto w-full">
-              <Table className="min-w-max">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Nome</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Ruolo</TableHead>
-                    <TableHead>Piano</TableHead>
-                    <TableHead>Provider</TableHead>
-                    <TableHead>Stato Abb.</TableHead>
-                    <TableHead className="hidden md:table-cell">Scadenza</TableHead>
-                    <TableHead className="hidden md:table-cell">Tot. Pagato</TableHead>
-                    <TableHead className="hidden lg:table-cell">Saldo</TableHead>
-                    <TableHead className="hidden lg:table-cell">Notifiche</TableHead>
-                    <TableHead className="hidden xl:table-cell">WhatsApp</TableHead>
-                    <TableHead className="hidden xl:table-cell">Data Registrazione</TableHead>
-                    <TableHead className="hidden xl:table-cell">Ultimo Accesso</TableHead>
-                    <TableHead className="text-right sticky right-0 bg-background z-10">Azioni</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredUsers.map(u => (
-                    <TableRow key={u.id}>
-                      <TableCell className="font-medium text-sm">
-                        <span className="flex items-center gap-2">
-                          {u.name}
-                          {u.id === currentUser?.id && <Badge variant="outline" className="text-xs bg-primary/10 text-primary border-primary/30">Tu</Badge>}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-sm">{u.email}</TableCell>
-                      <TableCell><RoleBadge role={u.role} /></TableCell>
-                      <TableCell><PlanBadge plan={u.plan} /></TableCell>
-                      <TableCell><ProviderBadge provider={(u.billingProvider as BillingProvider) || 'mock'} /></TableCell>
-                      <TableCell><StatusBadge status={u.subscriptionStatus} /></TableCell>
-                      <TableCell className="text-xs hidden md:table-cell">{fmtDate(u.subscriptionEnd)}</TableCell>
-                      <TableCell className="text-xs font-mono hidden md:table-cell">€{u.totalPaid.toFixed(2)}</TableCell>
-                      <TableCell className="text-xs font-mono hidden lg:table-cell">€{u.balance.toFixed(2)}</TableCell>
-                      <TableCell className="hidden lg:table-cell">
-                        <Switch checked={u.notifications} onCheckedChange={() => toggleNotifications(u.id)} />
-                      </TableCell>
-                      <TableCell className="hidden xl:table-cell text-xs">
-                        {u.whatsapp ? <span className="flex items-center gap-1">📞 {u.whatsapp}</span> : '—'}
-                      </TableCell>
-                      <TableCell className="hidden xl:table-cell text-xs">{fmtDate(u.registeredAt)}</TableCell>
-                      <TableCell className="hidden xl:table-cell text-xs">{fmtDate(u.lastAccess)}</TableCell>
-                      <TableCell className="text-right sticky right-0 bg-background z-10">
-                        <div className="flex items-center justify-end gap-1">
-                          <Button variant="outline" size="sm" onClick={() => openEdit(u)} className="text-xs h-7 px-2">Modifica</Button>
-                          <Button variant="outline" size="sm" onClick={() => { setSelectedUser(u); setPaymentDetailOpen(true); }} className="text-xs h-7 px-2">€</Button>
-                          <Button variant="outline" size="sm" onClick={() => { setSelectedUser(u); setPwFields({ next: '', confirm: '' }); setPwError(''); setPwFormOpen(true); }} className="text-xs h-7 px-2"><Key size={12} className="mr-1" />PW</Button>
-                          <Button variant="outline" size="sm" onClick={() => { setSelectedUser(u); setDeleteConfirmOpen(true); }} disabled={u.id === currentUser?.id || u.role === 'admin'} className="text-xs h-7 px-2 text-destructive border-destructive/30 hover:bg-destructive/10"><Trash2 size={12} className="mr-1" />Del</Button>
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="text-xs">
+                <TableHead>Nome</TableHead><TableHead>Email</TableHead><TableHead>Ruolo</TableHead>
+                <TableHead>Piano</TableHead><TableHead>Provider</TableHead><TableHead>Stato Abb.</TableHead>
+                <TableHead>Scadenza</TableHead><TableHead>Tot. Pagato</TableHead><TableHead>Saldo</TableHead>
+                <TableHead>WhatsApp</TableHead><TableHead>Notifiche</TableHead>
+                <TableHead>Data Reg.</TableHead><TableHead>Ultimo Accesso</TableHead>
+                <TableHead className="text-right">Azioni</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              <TableRow className="bg-muted/30 hover:bg-muted/30">
+                <TableCell colSpan={14} className="py-1 px-4 text-xs font-medium text-muted-foreground">
+                  <div className="flex items-center gap-2"><Users className="w-3.5 h-3.5" />Utenti Registrati ({filtered.length})</div>
+                </TableCell>
+              </TableRow>
+              {filtered.length === 0
+                ? <TableRow><TableCell colSpan={14} className="text-center py-10 text-muted-foreground">Nessun utente trovato</TableCell></TableRow>
+                : filtered.map(u => {
+                  const isEditing = editingUser === u.id;
+                  const isMe = u.id === currentUser?.id;
+                  return (
+                    <TableRow key={u.id} className={isEditing ? 'bg-primary/5' : ''}>
+                      {/* Nome */}
+                      <TableCell className="whitespace-nowrap">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold shrink-0 ${u.role === 'admin' ? 'bg-gradient-to-br from-green-500 to-green-700' : 'bg-gradient-to-br from-primary to-primary/70'}`}>
+                            {u.name[0].toUpperCase()}
+                          </div>
+                          <span className="text-sm font-medium">
+                            {u.name}{isMe && <Badge variant="outline" className="ml-1 text-[10px] py-0">Tu</Badge>}
+                          </span>
                         </div>
                       </TableCell>
+                      {/* Email */}
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{u.email}</TableCell>
+                      {/* Ruolo */}
+                      <TableCell>
+                        {isEditing
+                          ? <Select value={editForm.role} onValueChange={(v: UserRole) => setEditForm({ ...editForm, role: v })}><SelectTrigger className="w-28 h-7 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="user">User</SelectItem><SelectItem value="user_pro">User Pro</SelectItem><SelectItem value="admin">Admin</SelectItem></SelectContent></Select>
+                          : getRoleBadge(u.role)}
+                      </TableCell>
+                      {/* Piano */}
+                      <TableCell>
+                        {isEditing
+                          ? <Select value={editForm.plan} onValueChange={(v: PlanType) => setEditForm({ ...editForm, plan: v })}><SelectTrigger className="w-32 h-7 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="free">Free</SelectItem><SelectItem value="trial">Trial</SelectItem><SelectItem value="premium_monthly">Premium M</SelectItem><SelectItem value="premium_yearly">Premium Y</SelectItem></SelectContent></Select>
+                          : getPlanBadge(u.plan)}
+                      </TableCell>
+                      {/* Provider */}
+                      <TableCell>{getProviderBadge(u.billingProvider)}</TableCell>
+                      {/* Stato Abb. */}
+                      <TableCell>
+                        {isEditing
+                          ? <Select value={editForm.subscriptionStatus} onValueChange={v => setEditForm({ ...editForm, subscriptionStatus: v })}><SelectTrigger className="w-28 h-7 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="active">Attivo</SelectItem><SelectItem value="in_trial">Trial</SelectItem><SelectItem value="cancelled">Cancellato</SelectItem><SelectItem value="blocked">Bloccato</SelectItem><SelectItem value="expired">Scaduto</SelectItem></SelectContent></Select>
+                          : getStatusBadge(u.subscriptionStatus)}
+                      </TableCell>
+                      {/* Scadenza */}
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                        {isEditing
+                          ? <Input type="date" value={editForm.subscriptionEnd} onChange={e => setEditForm({ ...editForm, subscriptionEnd: e.target.value })} className="w-32 h-7 text-xs" />
+                          : formatDate(u.subscriptionEnd || u.trialEnd)}
+                      </TableCell>
+                      {/* Tot. Pagato */}
+                      <TableCell className="text-xs text-muted-foreground">{u.totalPaid > 0 ? `€${u.totalPaid.toFixed(2)}` : '—'}</TableCell>
+                      {/* Saldo */}
+                      <TableCell className="text-xs text-muted-foreground">{u.balance > 0 ? `€${u.balance.toFixed(2)}` : '—'}</TableCell>
+                      {/* WhatsApp */}
+                      <TableCell className="whitespace-nowrap">
+                        {isEditing
+                          ? <Input value={editForm.whatsapp} onChange={e => setEditForm({ ...editForm, whatsapp: e.target.value })} placeholder="+39..." className="w-28 h-7 text-xs" />
+                          : <span className="text-xs">{u.whatsapp || <span className="text-muted-foreground">—</span>}</span>}
+                      </TableCell>
+                      {/* Notifiche */}
+                      <TableCell>
+                        {isEditing
+                          ? <Switch checked={editForm.notifications} onCheckedChange={c => setEditForm({ ...editForm, notifications: c })} />
+                          : <Switch checked={u.notifications} disabled />}
+                      </TableCell>
+                      {/* Data Reg. */}
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDate(u.registeredAt)}</TableCell>
+                      {/* Ultimo Accesso */}
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{formatDate(u.lastAccess)}</TableCell>
+                      {/* Azioni */}
+                      <TableCell className="text-right whitespace-nowrap">
+                        {isEditing
+                          ? <div className="flex items-center justify-end gap-1">
+                              <Button size="sm" variant="ghost" onClick={() => setEditingUser(null)} className="h-7 text-xs">Annulla</Button>
+                              <Button size="sm" onClick={() => saveUser(u.id)} disabled={saving === u.id} className="h-7 text-xs gap-1">
+                                {saving === u.id ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}Salva
+                              </Button>
+                            </div>
+                          : <div className="flex items-center justify-end gap-1">
+                              <Button size="sm" variant="outline" onClick={() => startEditing(u)} className="h-7 text-xs">Modifica</Button>
+                              {!isMe && (
+                                <Button size="sm" variant="ghost" onClick={() => toggleBlock(u)} disabled={blocking === u.id}
+                                  title={u.subscriptionStatus === 'blocked' ? 'Sblocca' : 'Blocca'}
+                                  className={`h-7 w-7 p-0 ${u.subscriptionStatus === 'blocked' ? 'text-green-600 hover:bg-green-50' : 'text-orange-500 hover:bg-orange-50'}`}>
+                                  {blocking === u.id ? <Loader2 className="w-3 h-3 animate-spin" /> : u.subscriptionStatus === 'blocked' ? <CheckCircle2 className="w-3 h-3" /> : <Ban className="w-3 h-3" />}
+                                </Button>
+                              )}
+                              {!isMe && (
+                                <AlertDialog>
+                                  <AlertDialogTrigger asChild>
+                                    <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-500 hover:bg-red-50"><Trash2 className="w-3 h-3" /></Button>
+                                  </AlertDialogTrigger>
+                                  <AlertDialogContent>
+                                    <AlertDialogHeader><AlertDialogTitle>Eliminare utente?</AlertDialogTitle><AlertDialogDescription>Stai per eliminare <strong>{u.name}</strong>. Azione irreversibile.</AlertDialogDescription></AlertDialogHeader>
+                                    <AlertDialogFooter><AlertDialogCancel>Annulla</AlertDialogCancel><AlertDialogAction onClick={() => deleteUser(u.id)} className="bg-red-600 hover:bg-red-700">Elimina</AlertDialogAction></AlertDialogFooter>
+                                  </AlertDialogContent>
+                                </AlertDialog>
+                              )}
+                            </div>}
+                      </TableCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+                  );
+                })}
+            </TableBody>
+          </Table>
+        </div>
+      </Card>
 
-      {/* User Form */}
-      <Dialog open={userFormOpen} onOpenChange={setUserFormOpen}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>{isNew ? 'Nuovo' : 'Modifica'} Utente</DialogTitle></DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1"><Label>Nome *</Label><Input value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))} /></div>
-            <div className="space-y-1"><Label>Email *</Label><Input type="email" value={form.email} onChange={e => setForm(p => ({ ...p, email: e.target.value }))} /></div>
-            <div className="space-y-1">
-              <Label>Ruolo</Label>
-              <Select value={form.role} onValueChange={(v) => setForm(p => ({ ...p, role: v as UserRole }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="admin">Admin</SelectItem>
-                  <SelectItem value="user_pro">User Pro</SelectItem>
-                  <SelectItem value="user">User</SelectItem>
-                </SelectContent>
-              </Select>
+      {/* Nuovo Utente Dialog */}
+      <Dialog open={showNewUser} onOpenChange={setShowNewUser}>
+        <DialogContent className="max-w-md">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><UserPlus className="w-5 h-5 text-primary" />Nuovo Utente</DialogTitle></DialogHeader>
+          <div className="space-y-4 py-2">
+            <div><Label className="text-sm">Nome completo</Label><Input placeholder="Mario Rossi" value={newUserForm.name} onChange={e => setNewUserForm({ ...newUserForm, name: e.target.value })} className="mt-1" /></div>
+            <div><Label className="text-sm">Email *</Label><Input type="email" value={newUserForm.email} onChange={e => setNewUserForm({ ...newUserForm, email: e.target.value })} className="mt-1" /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><Label className="text-sm">Ruolo</Label>
+                <Select value={newUserForm.role} onValueChange={(v: UserRole) => setNewUserForm({ ...newUserForm, role: v })}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="user">User</SelectItem><SelectItem value="user_pro">User Pro</SelectItem><SelectItem value="admin">Admin</SelectItem></SelectContent>
+                </Select>
+              </div>
+              <div><Label className="text-sm">Piano</Label>
+                <Select value={newUserForm.plan} onValueChange={(v: PlanType) => setNewUserForm({ ...newUserForm, plan: v })}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="free">Free</SelectItem><SelectItem value="trial">Trial</SelectItem><SelectItem value="premium_monthly">Premium M</SelectItem><SelectItem value="premium_yearly">Premium Y</SelectItem></SelectContent>
+                </Select>
+              </div>
             </div>
-            <div className="space-y-1"><Label>WhatsApp</Label><Input value={form.whatsapp} onChange={e => setForm(p => ({ ...p, whatsapp: e.target.value }))} /></div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setUserFormOpen(false)}>Annulla</Button>
-            <Button onClick={handleSave} disabled={!form.name || !form.email}>Salva</Button>
+            <Button variant="outline" onClick={() => setShowNewUser(false)}>Annulla</Button>
+            <Button onClick={createUser} className="gap-2"><UserPlus className="w-4 h-4" />Crea Utente</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Password Dialog */}
-      <Dialog open={pwFormOpen} onOpenChange={(open) => { setPwFormOpen(open); if (!open) { setPwFields({ next: '', confirm: '' }); setPwError(''); } }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Cambio Password</DialogTitle>
-            <DialogDescription>Imposta una nuova password per <strong>{selectedUser?.name}</strong></DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1">
-              <Label>Nuova password</Label>
-              <Input type="password" value={pwFields.next} onChange={e => setPwFields(p => ({ ...p, next: e.target.value }))} placeholder="Minimo 8 caratteri" />
-            </div>
-            <div className="space-y-1">
-              <Label>Conferma password</Label>
-              <Input type="password" value={pwFields.confirm} onChange={e => setPwFields(p => ({ ...p, confirm: e.target.value }))} placeholder="Ripeti la password" />
-            </div>
-            {pwError && <p className="text-sm text-destructive">{pwError}</p>}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setPwFormOpen(false); setPwFields({ next: '', confirm: '' }); setPwError(''); }}>Annulla</Button>
-            <Button onClick={() => {
-              if (pwFields.next.length < 8) { setPwError('Minimo 8 caratteri'); return; }
-              if (pwFields.next !== pwFields.confirm) { setPwError('Le password non coincidono'); return; }
-              setPwFormOpen(false);
-              setPwFields({ next: '', confirm: '' });
-              setPwError('');
-            }}>Salva</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Payment Detail Dialog */}
-      <Dialog open={paymentDetailOpen} onOpenChange={setPaymentDetailOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Dettaglio Pagamenti — {selectedUser?.name}</DialogTitle>
-          </DialogHeader>
-          {selectedUser && (
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <p className="text-xs text-muted-foreground">Piano</p>
-                  <PlanBadge plan={selectedUser.plan} />
-                </div>
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <p className="text-xs text-muted-foreground">Provider</p>
-                  <ProviderBadge provider={(selectedUser.billingProvider as BillingProvider) || 'mock'} />
-                </div>
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <p className="text-xs text-muted-foreground">Stato</p>
-                  <StatusBadge status={selectedUser.subscriptionStatus} />
-                </div>
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <p className="text-xs text-muted-foreground">Scadenza</p>
-                  <p className="font-semibold text-sm">{fmtDate(selectedUser.subscriptionEnd)}</p>
-                </div>
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <p className="text-xs text-muted-foreground">Totale Pagato</p>
-                  <p className="font-semibold text-sm font-mono">€{selectedUser.totalPaid.toFixed(2)}</p>
-                </div>
-                <div className="bg-muted/50 rounded-lg p-3">
-                  <p className="text-xs text-muted-foreground">Saldo</p>
-                  <p className="font-semibold text-sm font-mono">€{selectedUser.balance.toFixed(2)}</p>
-                </div>
-              </div>
-              <div>
-                <h4 className="font-semibold text-sm mb-2">Storico Transazioni</h4>
-                {selectedUser.transactions.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-4">Nessuna transazione</p>
-                ) : (
-                  <Table>
-                    <TableHeader><TableRow>
-                      <TableHead>Data</TableHead><TableHead>Descrizione</TableHead><TableHead>Importo</TableHead><TableHead>Stato</TableHead><TableHead>Rif.</TableHead>
-                    </TableRow></TableHeader>
-                    <TableBody>{selectedUser.transactions.map(t => (
-                      <TableRow key={t.id}>
-                        <TableCell className="text-xs">{fmtDate(t.date)}</TableCell>
-                        <TableCell className="text-xs">{t.description}</TableCell>
-                        <TableCell className="text-xs font-mono">€{t.amount.toFixed(2)}</TableCell>
-                        <TableCell><Badge variant="outline" className={`text-xs ${t.status === 'completed' ? 'bg-green-50 text-green-700 border-green-200' : ''}`}>{t.status === 'completed' ? 'Riuscito' : t.status}</Badge></TableCell>
-                        <TableCell className="text-xs font-mono">{t.reference}</TableCell>
-                      </TableRow>
-                    ))}</TableBody>
-                  </Table>
-                )}
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirm */}
-      <AlertDialog open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Eliminare utente?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Stai per eliminare l'utente <strong>{selectedUser?.name}</strong>. Questa azione non può essere annullata.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Annulla</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Elimina</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
-  );
-}
-
-function SummaryCard({ label, value, icon, highlight }: { label: string; value: string; icon: React.ReactNode; highlight?: boolean }) {
-  return (
-    <Card className={highlight ? 'border-primary/30' : ''}>
-      <CardContent className="p-4">
-        <div className="flex items-center gap-2 mb-1">{icon}<span className="text-xs text-muted-foreground">{label}</span></div>
-        <p className={`text-lg font-bold ${highlight ? 'text-primary' : ''}`}>{value}</p>
-      </CardContent>
-    </Card>
   );
 }
