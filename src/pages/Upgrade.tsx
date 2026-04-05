@@ -96,11 +96,11 @@ export default function Upgrade() {
               <CardContent className="flex items-center justify-between p-4">
                 <div>
                   <p className="font-semibold text-sm">Prova Gratuita</p>
-                  <p className="text-xs text-muted-foreground">7 giorni gratis, poi scegli un piano</p>
+                  <p className="text-xs text-muted-foreground">14 giorni gratis, poi scegli un piano</p>
                 </div>
                 <div className="text-right">
                   <p className="font-bold text-primary">€0,00</p>
-                  <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200">7 giorni</Badge>
+                  <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200">14 giorni</Badge>
                 </div>
               </CardContent>
             </Card>
@@ -113,7 +113,7 @@ export default function Upgrade() {
                 <p className="text-xs text-muted-foreground">Rinnovo mensile</p>
               </div>
               <div className="text-right">
-                <p className="font-bold text-primary">€7,99/mese</p>
+                <p className="font-bold text-primary">€5,99/mese</p>
               </div>
             </CardContent>
           </Card>
@@ -125,11 +125,11 @@ export default function Upgrade() {
             <CardContent className="flex items-center justify-between p-4">
               <div>
                 <p className="font-semibold text-sm">Premium Yearly</p>
-                <p className="text-xs text-muted-foreground">Risparmia il 48%</p>
+                <p className="text-xs text-muted-foreground">Risparmia il 44% — €3,33/mese</p>
               </div>
               <div className="text-right">
-                <p className="font-bold text-primary">€49,99/anno</p>
-                <p className="text-xs text-muted-foreground line-through">€95,88</p>
+                <p className="font-bold text-primary">€39,99/anno</p>
+                <p className="text-xs text-muted-foreground line-through">€71,88</p>
               </div>
             </CardContent>
           </Card>
